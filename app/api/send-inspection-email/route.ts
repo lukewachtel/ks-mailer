@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 
-// Allow your Expo web origins (add/remove as needed)
 const ALLOWED_ORIGINS = ['http://localhost:8081', 'http://localhost:19006'];
 
 function corsHeaders(origin?: string) {
@@ -13,19 +12,23 @@ function corsHeaders(origin?: string) {
   };
 }
 
-// Preflight (browser checks CORS before POST)
 export async function OPTIONS(req: Request) {
   const origin = req.headers.get('origin') ?? undefined;
   return new NextResponse(null, { status: 200, headers: corsHeaders(origin) });
 }
 
-// Actual email endpoint
 export async function POST(req: Request) {
   const origin = req.headers.get('origin') ?? undefined;
 
+  // 🔐 Check client key against server secret
+  const apiKey = req.headers.get('x-api-key');
+  if (apiKey !== process.env.MAILER_KEY) {
+    return new NextResponse('Unauthorized', { status: 401, headers: corsHeaders(origin) });
+  }
+
   try {
     const body = await req.json();
-    // TODO: send your email here using server-side secrets
+    // TODO: send the email here using server-side secrets
     return NextResponse.json({ ok: true }, { headers: corsHeaders(origin) });
   } catch (err: any) {
     return new NextResponse(err?.message ?? 'Internal Error', {
