@@ -2,10 +2,9 @@
 import { NextResponse } from 'next/server';
 
 const ALLOWED_ORIGINS = [
-  'http://localhost:19006',
-  'http://localhost:19007',
   'http://localhost:8081',
-  'https://ks-mailer-zodm.vercel.app', // your prod app can call itself
+  'http://localhost:19006',
+  'http://localhost:19007', // Expo web on 19007
 ];
 
 function cors(origin?: string) {

@@ -2,14 +2,11 @@
 import { NextResponse } from 'next/server';
 
 function corsHeaders(origin?: string) {
-  const allowOrigin = origin || '*';
-  return {
-    'Access-Control-Allow-Origin': allowOrigin,
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, x-api-key, Authorization',
-    'Access-Control-Max-Age': '86400',
-  };
-}
+  const ALLOWED_ORIGINS = [
+  'http://localhost:8081',
+  'http://localhost:19006',
+  'http://localhost:19007', // Expo web on 19007
+];
 
 export async function OPTIONS(req: Request) {
   const origin = req.headers.get('origin') ?? undefined;

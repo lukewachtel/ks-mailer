@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 const ALLOWED_ORIGINS = [
   'http://localhost:8081',
   'http://localhost:19006',
-  'http://localhost:19007',
+  'http://localhost:19007', // Expo web on 19007
 ];
 
 // Reusable CORS headers
