@@ -1,19 +1,16 @@
 import { NextResponse } from 'next/server';
 import { Resend } from 'resend';
 
-// Ensure Node runtime (email libs need Node, not Edge)
+// Force Node runtime and disable static optimization for this route
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Allow your local Expo web ports
+// Allow local Expo web origins (add ports you use)
 const ALLOWED_ORIGINS = [
   'http://localhost:8081',
   'http://localhost:19006',
   'http://localhost:19007',
 ];
-
-// Resend client (set RESEND_API_KEY in Vercel)
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 function corsHeaders(origin?: string) {
   const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : '';
@@ -39,13 +36,22 @@ export async function POST(req: Request) {
     return new NextResponse('Unauthorized', { status: 401, headers: corsHeaders(origin) });
   }
 
+  // Lazily create the Resend client at request time (prevents build-time errors)
+  const RESEND_API_KEY = process.env.RESEND_API_KEY;
+  if (!RESEND_API_KEY) {
+    return new NextResponse('Server misconfigured: RESEND_API_KEY missing', {
+      status: 500,
+      headers: corsHeaders(origin),
+    });
+  }
+  const resend = new Resend(RESEND_API_KEY);
+
   try {
     const { to, subject, html } = await req.json();
     if (!to || !subject || !html) {
       return new NextResponse('Missing to/subject/html', { status: 400, headers: corsHeaders(origin) });
     }
 
-    // Send email via Resend
     const result = await resend.emails.send({
       from: 'Key & Stone <onboarding@resend.dev>',
       to,
@@ -53,7 +59,6 @@ export async function POST(req: Request) {
       html,
     });
 
-    // If Resend returned an error, surface it
     if (result.error) {
       return new NextResponse(result.error.message ?? 'Email send failed', {
         status: 500,
@@ -61,7 +66,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // ✅ Use result.data?.id (not result.id)
     return NextResponse.json(
       { ok: true, id: result.data?.id ?? null },
       { headers: corsHeaders(origin) }
