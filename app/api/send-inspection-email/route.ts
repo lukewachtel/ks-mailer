@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Resend } from 'resend';
 
-const ALLOWED_ORIGINS = ['http://localhost:8081', 'http://localhost:19006'];
+const ALLOWED_ORIGINS = ['http://localhost:8081', 'http://localhost:19006', 'http://localhost:19007'];
 
 // Resend client with server-side key
 const resend = new Resend(process.env.RESEND_API_KEY);
