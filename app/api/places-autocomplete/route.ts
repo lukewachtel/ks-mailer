@@ -1,77 +1,75 @@
+// app/api/places-autocomplete/route.ts
 import { NextResponse } from 'next/server';
 
 const ALLOWED_ORIGINS = [
-  'http://localhost:8081',
   'http://localhost:19006',
   'http://localhost:19007',
+  'http://localhost:8081',
+  'https://ks-mailer-zodm.vercel.app', // your prod app can call itself
 ];
 
-function corsHeaders(origin?: string) {
-  const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : '';
+function cors(origin?: string) {
+  const allow = origin && ALLOWED_ORIGINS.includes(origin) ? origin : '';
   return {
-    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Origin': allow,
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, x-api-key, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
   };
 }
 
-function isAuthorized(req: Request) {
-  const configured = process.env.MAILER_KEY;
-  if (!configured) return true;
-  const provided = req.headers.get('x-api-key') || '';
-  return provided === configured;
-}
-
 export async function OPTIONS(req: Request) {
   const origin = req.headers.get('origin') ?? undefined;
-  return new NextResponse(null, { status: 200, headers: corsHeaders(origin) });
+  return new NextResponse(null, { status: 200, headers: cors(origin) });
 }
 
 export async function GET(req: Request) {
   const origin = req.headers.get('origin') ?? undefined;
 
-  if (!isAuthorized(req)) {
-    return new NextResponse('Unauthorized', {
-      status: 401,
-      headers: corsHeaders(origin),
+  // 🔑 Read your server-side Google key
+  const key = process.env.GOOGLE_PLACES_KEY;
+  if (!key) {
+    return new NextResponse('Server misconfigured: GOOGLE_PLACES_KEY missing', {
+      status: 500,
+      headers: cors(origin),
     });
   }
 
+  // Support either ?q= or ?input= on the query string
+  const { searchParams } = new URL(req.url);
+  const input = searchParams.get('q') || searchParams.get('input') || '';
+  if (!input) {
+    return NextResponse.json({ suggestions: [] }, { headers: cors(origin) });
+  }
+
   try {
-    const url = new URL(req.url);
-    const q = url.searchParams.get('q') || '';
-    const components = url.searchParams.get('components') || 'country:au';
-
-    if (!q) {
-      return NextResponse.json(
-        { predictions: [], status: 'ZERO_RESULTS', error: 'Missing q param' },
-        { headers: corsHeaders(origin) }
-      );
-    }
-
-    const key = process.env.GOOGLE_PLACES_KEY;
-    if (!key) {
-      return NextResponse.json(
-        { predictions: [], status: 'ERROR', error: 'Server misconfigured: GOOGLE_PLACES_KEY missing' },
-        { status: 500, headers: corsHeaders(origin) }
-      );
-    }
-
-    const googleUrl =
-      `https://maps.googleapis.com/maps/api/place/autocomplete/json?` +
+    // Call Google server-to-server to avoid exposing the key in the browser
+    const url =
+      'https://maps.googleapis.com/maps/api/place/autocomplete/json?' +
       new URLSearchParams({
-        input: q,
+        input,
         key,
-        components,
+        // tweak types/region/language as you like:
+        types: 'geocode',
+        components: 'country:au',
       }).toString();
 
-    const resp = await fetch(googleUrl, { method: 'GET', cache: 'no-store' });
+    const resp = await fetch(url, { cache: 'no-store' });
     const data = await resp.json();
 
-    return NextResponse.json(data, { headers: corsHeaders(origin) });
-  } catch (err: any) {
-    const msg = typeof err?.message === 'string' ? err.message : 'Internal Error';
-    return new NextResponse(msg, { status: 500, headers: corsHeaders(origin) });
+    const suggestions = Array.isArray(data?.predictions)
+      ? data.predictions.map((p: any, i: number) => ({
+          id: p.place_id || String(i),
+          label: p.description || '',
+          components: {}, // you can add a details-by-place_id route later if needed
+        }))
+      : [];
+
+    return NextResponse.json({ suggestions }, { headers: cors(origin) });
+  } catch (e: any) {
+    return new NextResponse(e?.message || 'Upstream error', {
+      status: 502,
+      headers: cors(origin),
+    });
   }
 }
