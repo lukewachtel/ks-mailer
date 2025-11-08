@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { Resend } from 'resend';
 
-// Force Node runtime and disable static optimization for this route
+// Force Node runtime & disable static optimizations
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Allow local Expo web origins (add ports you use)
+// Allow your local Expo web origins
 const ALLOWED_ORIGINS = [
   'http://localhost:8081',
   'http://localhost:19006',
@@ -30,28 +30,43 @@ export async function OPTIONS(req: Request) {
 export async function POST(req: Request) {
   const origin = req.headers.get('origin') ?? undefined;
 
-  // Shared-secret check with your Expo app
-  const apiKey = req.headers.get('x-api-key');
-  if (apiKey !== process.env.MAILER_KEY) {
-    return new NextResponse('Unauthorized', { status: 401, headers: corsHeaders(origin) });
+  // 1) Shared-secret check
+  const clientKey = req.headers.get('x-api-key');
+  if (clientKey !== process.env.MAILER_KEY) {
+    return NextResponse.json(
+      { ok: false, error: 'Unauthorized: MAILER_KEY mismatch' },
+      { status: 401, headers: corsHeaders(origin) }
+    );
   }
 
-  // Lazily create the Resend client at request time (prevents build-time errors)
+  // 2) Ensure Resend key is present at runtime (not build-time)
   const RESEND_API_KEY = process.env.RESEND_API_KEY;
   if (!RESEND_API_KEY) {
-    return new NextResponse('Server misconfigured: RESEND_API_KEY missing', {
-      status: 500,
-      headers: corsHeaders(origin),
-    });
+    return NextResponse.json(
+      { ok: false, error: 'Server misconfigured: RESEND_API_KEY missing' },
+      { status: 500, headers: corsHeaders(origin) }
+    );
   }
+
+  let parsed: any = {};
+  try {
+    parsed = await req.json();
+  } catch {
+    // ignore
+  }
+
+  const { to, subject, html } = parsed || {};
+  if (!to || !subject || !html) {
+    return NextResponse.json(
+      { ok: false, error: 'Missing to/subject/html' },
+      { status: 400, headers: corsHeaders(origin) }
+    );
+  }
+
+  // 3) Create client lazily
   const resend = new Resend(RESEND_API_KEY);
 
   try {
-    const { to, subject, html } = await req.json();
-    if (!to || !subject || !html) {
-      return new NextResponse('Missing to/subject/html', { status: 400, headers: corsHeaders(origin) });
-    }
-
     const result = await resend.emails.send({
       from: 'Key & Stone <onboarding@resend.dev>',
       to,
@@ -59,19 +74,30 @@ export async function POST(req: Request) {
       html,
     });
 
-    if (result.error) {
-      return new NextResponse(result.error.message ?? 'Email send failed', {
-        status: 500,
-        headers: corsHeaders(origin),
-      });
+    // If Resend returns an error structure, surface it
+    if (result?.error) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: result.error.message || 'Resend error',
+          details: result.error, // extra context for debugging
+        },
+        { status: 500, headers: corsHeaders(origin) }
+      );
     }
 
     return NextResponse.json(
-      { ok: true, id: result.data?.id ?? null },
+      { ok: true, id: result?.data?.id ?? null },
       { headers: corsHeaders(origin) }
     );
   } catch (err: any) {
-    const msg = typeof err?.message === 'string' ? err.message : 'Internal Error';
-    return new NextResponse(msg, { status: 500, headers: corsHeaders(origin) });
+    // Return error details to the client so you can see the cause
+    return NextResponse.json(
+      {
+        ok: false,
+        error: String(err?.message || err || 'Internal Error'),
+      },
+      { status: 500, headers: corsHeaders(origin) }
+    );
   }
 }
