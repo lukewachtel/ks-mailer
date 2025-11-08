@@ -1,82 +1,81 @@
 // app/api/places-autocomplete/route.ts
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
-const ALLOWED_ORIGINS = [
-  'http://localhost:19007',
-  'http://localhost:19006',
-  'http://localhost:8081',
-  'https://ks-mailer-zodm.vercel.app',
-];
+const ALLOWED_ORIGINS = ['http://localhost:19007', 'http://localhost:8081'];
 
-function cors(res: NextResponse, origin: string | null) {
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.headers.set('Access-Control-Allow-Origin', origin);
-  }
-  res.headers.set('Vary', 'Origin');
-  res.headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.headers.set('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
-  return res;
+function corsHeaders(origin: string | null) {
+  const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : '*';
+  return {
+    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, x-api-key',
+  };
 }
 
-export async function OPTIONS(req: NextRequest) {
+export async function OPTIONS(req: Request) {
   const origin = req.headers.get('origin');
-  return cors(new NextResponse(null, { status: 204 }), origin);
+  return new NextResponse(null, { status: 204, headers: corsHeaders(origin) });
 }
 
-export async function GET(req: NextRequest) {
+function checkAuth(req: Request) {
+  const sent = req.headers.get('x-api-key') || '';
+  const server = process.env.MAILER_PROXY_KEY || '';
+  if (!server) {
+    return { ok: false, code: 500, msg: 'Server misconfigured: MAILER_PROXY_KEY missing' };
+  }
+  if (!sent) {
+    return { ok: false, code: 401, msg: 'Unauthorized: x-api-key header missing' };
+  }
+  if (sent !== server) {
+    return { ok: false, code: 401, msg: 'Unauthorized: bad x-api-key' };
+  }
+  return { ok: true, code: 200, msg: 'ok' };
+}
+
+export async function GET(req: Request) {
   const origin = req.headers.get('origin');
-  const key = process.env.GOOGLE_PLACES_KEY;
-  if (!key) {
-    return cors(
-      new NextResponse('Server misconfigured: GOOGLE_PLACES_KEY missing', { status: 500 }),
-      origin
-    );
+  const auth = checkAuth(req);
+  if (!auth.ok) {
+    return new NextResponse(auth.msg, { status: auth.code, headers: corsHeaders(origin) });
   }
-
-  const { searchParams } = new URL(req.url);
-  const q = (searchParams.get('q') || '').trim();
-  if (!q) {
-    return cors(new NextResponse(JSON.stringify({ suggestions: [] }), { status: 200 }), origin);
-  }
-
-  const url = new URL('https://maps.googleapis.com/maps/api/place/autocomplete/json');
-  url.searchParams.set('input', q);
-  url.searchParams.set('language', 'en-AU');
-  url.searchParams.set('components', 'country:au');
-  url.searchParams.set('types', 'geocode');
-  url.searchParams.set('key', key);
 
   try {
-    const resp = await fetch(url.toString(), { method: 'GET', cache: 'no-store' });
-    const data = await resp.json();
-
-    if (data.status !== 'OK') {
-      return cors(
-        new NextResponse(
-          JSON.stringify({ suggestions: [], googleStatus: data.status, googleError: data.error_message || null }),
-          { status: 200 }
-        ),
-        origin
-      );
+    const { searchParams } = new URL(req.url);
+    const q = (searchParams.get('q') || '').trim();
+    if (!q) {
+      return NextResponse.json({ suggestions: [] }, { headers: corsHeaders(origin) });
     }
 
-    const suggestions = (data.predictions || []).map((p: any, idx: number) => ({
-      id: p.place_id || String(idx),
-      label: p.description || '',
+    const key = process.env.GOOGLE_PLACES_KEY || '';
+    if (!key) {
+      return new NextResponse('Server misconfigured: GOOGLE_PLACES_KEY missing', {
+        status: 500,
+        headers: corsHeaders(origin),
+      });
+    }
+
+    const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(q)}&components=country:au&key=${key}`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      return new NextResponse(`Upstream error: ${resp.status} ${text}`, {
+        status: 502,
+        headers: corsHeaders(origin),
+      });
+    }
+    const data = await resp.json();
+
+    const suggestions = (data?.predictions || []).map((p: any) => ({
+      id: p.place_id,
+      label: p.description,
       components: {},
     }));
 
-    return cors(
-      new NextResponse(JSON.stringify({ suggestions }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-      origin
-    );
+    return NextResponse.json({ suggestions }, { headers: corsHeaders(origin) });
   } catch (e: any) {
-    return cors(
-      new NextResponse(JSON.stringify({ suggestions: [], error: e?.message || 'Internal Error' }), { status: 200 }),
-      origin
-    );
+    return new NextResponse(e?.message || 'Internal Error', {
+      status: 500,
+      headers: corsHeaders(origin),
+    });
   }
 }

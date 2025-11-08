@@ -1,100 +1,91 @@
 // app/api/place-details/route.ts
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
-const ALLOWED_ORIGINS = [
-  'http://localhost:19007',
-  'http://localhost:19006',
-  'http://localhost:8081',
-  'https://ks-mailer-zodm.vercel.app',
-];
+const ALLOWED_ORIGINS = ['http://localhost:19007', 'http://localhost:8081'];
 
-function cors(res: NextResponse, origin: string | null) {
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.headers.set('Access-Control-Allow-Origin', origin);
-  }
-  res.headers.set('Vary', 'Origin');
-  res.headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.headers.set('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
-  return res;
+function corsHeaders(origin: string | null) {
+  const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : '*';
+  return {
+    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, x-api-key',
+  };
 }
 
-export async function OPTIONS(req: NextRequest) {
+export async function OPTIONS(req: Request) {
   const origin = req.headers.get('origin');
-  return cors(new NextResponse(null, { status: 204 }), origin);
+  return new NextResponse(null, { status: 204, headers: corsHeaders(origin) });
 }
 
-export async function GET(req: NextRequest) {
+function checkAuth(req: Request) {
+  const sent = req.headers.get('x-api-key') || '';
+  const server = process.env.MAILER_PROXY_KEY || '';
+  if (!server) {
+    return { ok: false, code: 500, msg: 'Server misconfigured: MAILER_PROXY_KEY missing' };
+  }
+  if (!sent) {
+    return { ok: false, code: 401, msg: 'Unauthorized: x-api-key header missing' };
+  }
+  if (sent !== server) {
+    return { ok: false, code: 401, msg: 'Unauthorized: bad x-api-key' };
+  }
+  return { ok: true, code: 200, msg: 'ok' };
+}
+
+export async function GET(req: Request) {
   const origin = req.headers.get('origin');
-  const key = process.env.GOOGLE_PLACES_KEY;
-  if (!key) {
-    return cors(
-      new NextResponse('Server misconfigured: GOOGLE_PLACES_KEY missing', { status: 500 }),
-      origin
-    );
+  const auth = checkAuth(req);
+  if (!auth.ok) {
+    return new NextResponse(auth.msg, { status: auth.code, headers: corsHeaders(origin) });
   }
-
-  const { searchParams } = new URL(req.url);
-  const placeId = searchParams.get('id');
-  const label = searchParams.get('label') || '';
-
-  if (!placeId) {
-    return cors(new NextResponse(JSON.stringify({ error: 'Missing id (place_id)' }), { status: 400 }), origin);
-  }
-
-  const fields = ['address_component', 'formatted_address', 'geometry/location', 'name'].join(',');
-
-  const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
-  url.searchParams.set('place_id', placeId);
-  url.searchParams.set('fields', fields);
-  url.searchParams.set('language', 'en-AU');
-  url.searchParams.set('key', key);
 
   try {
-    const resp = await fetch(url.toString(), { method: 'GET', cache: 'no-store' });
-    const data = await resp.json();
-
-    if (data.status !== 'OK') {
-      return cors(
-        new NextResponse(
-          JSON.stringify({ error: 'Google Places error', googleStatus: data.status, googleError: data.error_message || null }),
-          { status: 502 }
-        ),
-        origin
-      );
+    const { searchParams } = new URL(req.url);
+    const placeId = (searchParams.get('id') || '').trim();
+    if (!placeId) {
+      return new NextResponse('Missing id', { status: 400, headers: corsHeaders(origin) });
     }
 
-    const comps = (data.result?.address_components || []) as Array<{ long_name: string; short_name: string; types: string[] }>;
+    const key = process.env.GOOGLE_PLACES_KEY || '';
+    if (!key) {
+      return new NextResponse('Server misconfigured: GOOGLE_PLACES_KEY missing', {
+        status: 500,
+        headers: corsHeaders(origin),
+      });
+    }
 
-    const byType = (t: string) => comps.find(c => c.types.includes(t));
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&key=${key}`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      return new NextResponse(`Upstream error: ${resp.status} ${text}`, {
+        status: 502,
+        headers: corsHeaders(origin),
+      });
+    }
+    const data = await resp.json();
 
+    const r = data?.result || {};
     const components = {
       unitNumber: '',
-      streetNumber: byType('street_number')?.long_name || '',
-      streetName: byType('route')?.long_name || '',
+      streetNumber: (r.address_components || []).find((c: any) => c.types.includes('street_number'))?.long_name || '',
+      streetName: (r.address_components || []).find((c: any) => c.types.includes('route'))?.long_name || '',
       streetType: '',
-      suburb: byType('locality')?.long_name || byType('postal_town')?.long_name || '',
-      state: byType('administrative_area_level_1')?.short_name || '',
-      postcode: byType('postal_code')?.long_name || '',
-      country: byType('country')?.long_name || 'Australia',
+      suburb: (r.address_components || []).find((c: any) => c.types.includes('locality'))?.long_name
+        || (r.address_components || []).find((c: any) => c.types.includes('postal_town'))?.long_name || '',
+      state: (r.address_components || []).find((c: any) => c.types.includes('administrative_area_level_1'))?.short_name || '',
+      postcode: (r.address_components || []).find((c: any) => c.types.includes('postal_code'))?.long_name || '',
+      country: (r.address_components || []).find((c: any) => c.types.includes('country'))?.long_name || '',
     };
 
-    const body = {
-      id: placeId,
-      label: label || data.result?.formatted_address || '',
-      components,
-    };
-
-    return cors(
-      new NextResponse(JSON.stringify(body), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-      origin
+    return NextResponse.json(
+      { id: r.place_id || placeId, label: r.formatted_address || '', components },
+      { headers: corsHeaders(origin) },
     );
   } catch (e: any) {
-    return cors(
-      new NextResponse(JSON.stringify({ error: e?.message || 'Internal Error' }), { status: 500 }),
-      origin
-    );
+    return new NextResponse(e?.message || 'Internal Error', {
+      status: 500,
+      headers: corsHeaders(origin),
+    });
   }
 }
