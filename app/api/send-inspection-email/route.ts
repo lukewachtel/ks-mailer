@@ -75,13 +75,13 @@ export async function POST(req: Request) {
 
   try {
     // ✅ Step 5: Send email — use your verified domain below
-    const result = await resend.emails.send({
-      from: 'Key + Stone No Reply<noreply@keyandstone.com.au>', // ← REPLACE with your verified domain
-      to,
-      subject,
-      html,
-      reply_to: 'hello@keyandstone.com.au', // optional but good practice
-    });
+   const result = await resend.emails.send({
+  from: 'Key & Stone <noreply@keyandstone.com.au>', // your verified domain
+  to,
+  subject,
+  html,
+  replyTo: 'hello@keyandstone.com.au',              // ✅ camelCase
+});
 
     if (result?.error) {
       return NextResponse.json(
