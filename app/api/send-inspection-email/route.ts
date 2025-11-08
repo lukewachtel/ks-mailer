@@ -1,17 +1,18 @@
 import { NextResponse } from 'next/server';
 import { Resend } from 'resend';
 
-// Force Node runtime & disable static optimizations
+// Make sure this route always runs on Node (not Edge)
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Allow your local Expo web origins
+// Allowed local origins (Expo web)
 const ALLOWED_ORIGINS = [
   'http://localhost:8081',
   'http://localhost:19006',
   'http://localhost:19007',
 ];
 
+// Reusable CORS headers
 function corsHeaders(origin?: string) {
   const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : '';
   return {
@@ -22,15 +23,17 @@ function corsHeaders(origin?: string) {
   };
 }
 
+// Handle preflight requests
 export async function OPTIONS(req: Request) {
   const origin = req.headers.get('origin') ?? undefined;
   return new NextResponse(null, { status: 200, headers: corsHeaders(origin) });
 }
 
+// Handle POST requests (email sending)
 export async function POST(req: Request) {
   const origin = req.headers.get('origin') ?? undefined;
 
-  // 1) Shared-secret check
+  // 🔐 Step 1: Check the shared secret key
   const clientKey = req.headers.get('x-api-key');
   if (clientKey !== process.env.MAILER_KEY) {
     return NextResponse.json(
@@ -39,7 +42,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // 2) Ensure Resend key is present at runtime (not build-time)
+  // ⚙️ Step 2: Load Resend API key
   const RESEND_API_KEY = process.env.RESEND_API_KEY;
   if (!RESEND_API_KEY) {
     return NextResponse.json(
@@ -48,11 +51,15 @@ export async function POST(req: Request) {
     );
   }
 
+  // 📨 Step 3: Parse request body
   let parsed: any = {};
   try {
     parsed = await req.json();
   } catch {
-    // ignore
+    return NextResponse.json(
+      { ok: false, error: 'Invalid JSON body' },
+      { status: 400, headers: corsHeaders(origin) }
+    );
   }
 
   const { to, subject, html } = parsed || {};
@@ -63,25 +70,22 @@ export async function POST(req: Request) {
     );
   }
 
-  // 3) Create client lazily
+  // ✉️ Step 4: Initialize Resend client
   const resend = new Resend(RESEND_API_KEY);
 
   try {
+    // ✅ Step 5: Send email — use your verified domain below
     const result = await resend.emails.send({
-      from: 'Key & Stone <onboarding@resend.dev>',
+      from: 'Key + Stone No Reply<noreply@keyandstone.com.au>', // ← REPLACE with your verified domain
       to,
       subject,
       html,
+      reply_to: 'hello@keyandstone.com.au', // optional but good practice
     });
 
-    // If Resend returns an error structure, surface it
     if (result?.error) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: result.error.message || 'Resend error',
-          details: result.error, // extra context for debugging
-        },
+        { ok: false, error: result.error.message || 'Resend error' },
         { status: 500, headers: corsHeaders(origin) }
       );
     }
@@ -91,12 +95,8 @@ export async function POST(req: Request) {
       { headers: corsHeaders(origin) }
     );
   } catch (err: any) {
-    // Return error details to the client so you can see the cause
     return NextResponse.json(
-      {
-        ok: false,
-        error: String(err?.message || err || 'Internal Error'),
-      },
+      { ok: false, error: err?.message || 'Internal error' },
       { status: 500, headers: corsHeaders(origin) }
     );
   }
