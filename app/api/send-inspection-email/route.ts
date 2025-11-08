@@ -56,7 +56,7 @@ export async function POST(req: Request) {
       html,
     });
 
-    // ✅ Handle response safely (fix for your type error)
+    // ✅ Handle response safely (fix for type error)
     if (result.error) {
       console.error('Resend error:', result.error);
       return new NextResponse(result.error.message ?? 'Email send failed', {
